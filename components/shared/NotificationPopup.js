@@ -41,9 +41,54 @@ export default function NotificationPopup({ notification, onDismiss }) {
     onDismiss()
   }
 
-  const handleJoinRoom = () => {
-    router.push(`/room/${notification.data.roomId}`)
-    onDismiss()
+  const handleJoinRoom = async () => {
+    // Check if user is currently in another room
+    const { data: currentMembership } = await supabase
+      .from('room_members')
+      .select('room_id, rooms!inner(id, name, host_id)')
+      .eq('user_id', notification.userId)
+      .eq('status', 'joined')
+      .eq('is_connected', true)
+      .single()
+
+    // If user is in another room
+    if (currentMembership && currentMembership.room_id !== notification.data.roomId) {
+      const isHostOfCurrentRoom = currentMembership.rooms.host_id === notification.userId
+
+      if (isHostOfCurrentRoom) {
+        // Show prompt for hosts
+        alert('You are the host of another room. Please transfer hosting and join from dashboard.')
+        onDismiss()
+        return
+      }
+
+      // For regular members, leave current room and join new one
+      if (confirm(`You are currently in "${currentMembership.rooms.name}". Leave and join this room?`)) {
+        await supabase
+          .from('room_members')
+          .update({ status: 'left', is_connected: false })
+          .eq('room_id', currentMembership.room_id)
+          .eq('user_id', notification.userId)
+
+        // Check if room should be deleted (no other joined members)
+        const { count } = await supabase
+          .from('room_members')
+          .select('*', { count: 'exact', head: true })
+          .eq('room_id', currentMembership.room_id)
+          .eq('status', 'joined')
+
+        if (count === 0) {
+          await supabase.from('rooms').delete().eq('id', currentMembership.room_id)
+        }
+
+        router.push(`/room/${notification.data.roomId}`)
+        onDismiss()
+      }
+    } else {
+      // Not in another room, join directly
+      router.push(`/room/${notification.data.roomId}`)
+      onDismiss()
+    }
   }
 
   if (notification.type === 'friend_request') {

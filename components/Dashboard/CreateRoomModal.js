@@ -11,7 +11,7 @@ export default function CreateRoomModal({ userId, onClose }) {
   const [friends, setFriends] = useState([])
   const [selectedFriends, setSelectedFriends] = useState([])
   const [permissions, setPermissions] = useState({
-    playback_control: 'host_only',
+    playback_control: 'everyone',
     load_movies: 'host_only',
     invite_users: 'host_only',
   })
@@ -269,22 +269,6 @@ export default function CreateRoomModal({ userId, onClose }) {
           </h3>
 
           <div className="space-y-3">
-            <div>
-              <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
-                Playback Control (Play/Pause/Seek)
-              </label>
-              <select
-                value={permissions.playback_control}
-                onChange={(e) =>
-                  setPermissions({ ...permissions, playback_control: e.target.value })
-                }
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-              >
-                <option value="host_only">Host Only</option>
-                <option value="everyone">Everyone</option>
-              </select>
-            </div>
-
             <div>
               <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
                 Load Movies

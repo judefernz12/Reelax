@@ -290,7 +290,12 @@ export default function RoomPage({ params }) {
       {/* Top Navigation */}
       <nav className="bg-gray-800 border-b border-gray-700 px-4 py-3">
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">{room?.name}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold">{room?.name}</h1>
+            {room?.host_id === user.id && (
+              <span className="text-xl" title="You are the host">👑</span>
+            )}
+          </div>
           <div className="flex items-center gap-3">
             <MembersDropdown
               roomId={roomId}
@@ -371,7 +376,6 @@ export default function RoomPage({ params }) {
 function PermissionsModal({ room, onClose, onUpdate }) {
   const supabase = createClient()
   const [permissions, setPermissions] = useState({
-    playback_control: room.playback_control,
     load_movies: room.load_movies,
     invite_users: room.invite_users,
   })
@@ -393,20 +397,6 @@ function PermissionsModal({ room, onClose, onUpdate }) {
         <h2 className="text-2xl font-bold mb-4">Room Settings</h2>
 
         <div className="space-y-4">
-          <div>
-            <label className="block text-sm mb-2">Playback Control</label>
-            <select
-              value={permissions.playback_control}
-              onChange={(e) =>
-                setPermissions({ ...permissions, playback_control: e.target.value })
-              }
-              className="w-full px-4 py-2 bg-gray-700 rounded border border-gray-600"
-            >
-              <option value="host_only">Host Only</option>
-              <option value="everyone">Everyone</option>
-            </select>
-          </div>
-
           <div>
             <label className="block text-sm mb-2">Load Movies</label>
             <select

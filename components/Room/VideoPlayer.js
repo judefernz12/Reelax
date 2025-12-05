@@ -11,13 +11,21 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
   const [videoUrl, setVideoUrl] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const syncLockRef = useRef(false)
+  const joinSyncTimerRef = useRef(null)
+  const wasPlayingBeforeSeekRef = useRef(false)
 
-  const canControl = isHost || room.playback_control === 'everyone'
+  const canControl = true // Everyone can control playback
   const canLoadVideo = isHost || room.load_movies === 'everyone'
 
   // Event handlers as refs to avoid recreating on every render
   const handlePlay = useCallback(async () => {
     if (!canControl || syncLockRef.current || !playerRef.current) return
+
+    // Clear any pending join sync timer when user manually plays
+    if (joinSyncTimerRef.current) {
+      clearTimeout(joinSyncTimerRef.current)
+      joinSyncTimerRef.current = null
+    }
 
     syncLockRef.current = true
     const currentTime = playerRef.current.currentTime()
@@ -68,11 +76,27 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
     }, 500)
   }, [canControl, roomId, supabase])
 
+  const handleSeeking = useCallback(() => {
+    // Track if video was playing before seek started
+    if (playerRef.current) {
+      wasPlayingBeforeSeekRef.current = !playerRef.current.paused()
+    }
+  }, [])
+
   const handleSeeked = useCallback(async () => {
     if (!canControl || syncLockRef.current || !playerRef.current) return
 
+    // Clear any pending join sync timer when user manually seeks
+    if (joinSyncTimerRef.current) {
+      clearTimeout(joinSyncTimerRef.current)
+      joinSyncTimerRef.current = null
+    }
+
     syncLockRef.current = true
     const currentTime = playerRef.current.currentTime()
+
+    // Use the flag we set in handleSeeking to know if it was playing
+    const wasPlaying = wasPlayingBeforeSeekRef.current
 
     // Validate currentTime is a valid number
     const timestamp = isNaN(currentTime) ? 0 : currentTime
@@ -80,13 +104,18 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
     const { error } = await supabase
       .from('rooms')
       .update({
-        is_playing: false,
+        is_playing: wasPlaying,
         video_timestamp: timestamp,
       })
       .eq('id', roomId)
 
     if (error) {
       console.error('Error updating seek state:', error)
+    }
+
+    // If it was playing before seek, resume playback locally
+    if (wasPlaying && playerRef.current.paused()) {
+      playerRef.current.play()
     }
 
     setTimeout(() => {
@@ -112,7 +141,21 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
         // Listen to player events
         player.on('play', handlePlay)
         player.on('pause', handlePause)
+        player.on('seeking', handleSeeking)
         player.on('seeked', handleSeeked)
+
+        // Auto-load current video if one exists in the room
+        if (room.current_video_url) {
+          loadVideo(room.current_video_url, room.video_timestamp, false).then(() => {
+            // Set initial play state after video loads
+            if (room.is_playing) {
+              player.one('loadedmetadata', () => {
+                player.currentTime(room.video_timestamp)
+                player.play()
+              })
+            }
+          })
+        }
       })
     }
 
@@ -122,11 +165,11 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
         playerRef.current = null
       }
     }
-  }, [handlePlay, handlePause, handleSeeked])
+  }, [handlePlay, handlePause, handleSeeking, handleSeeked])
 
   // Subscribe to room changes
   useEffect(() => {
-    const channel = supabase
+    const roomSyncChannel = supabase
       .channel(`room_${roomId}_sync`)
       .on(
         'postgres_changes',
@@ -150,11 +193,20 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
           if (playerRef.current) {
             syncLockRef.current = true
 
-            if (is_playing) {
+            const currentTime = playerRef.current.currentTime()
+            const timeDiff = Math.abs(currentTime - video_timestamp)
+
+            // Only sync if time difference is significant (more than 1 second)
+            // This prevents unnecessary seeking due to network latency
+            if (timeDiff > 1.0) {
               playerRef.current.currentTime(video_timestamp)
+            }
+
+            // Sync play/pause state
+            const currentlyPlaying = !playerRef.current.paused()
+            if (is_playing && !currentlyPlaying) {
               playerRef.current.play()
-            } else {
-              playerRef.current.currentTime(video_timestamp)
+            } else if (!is_playing && currentlyPlaying) {
               playerRef.current.pause()
             }
 
@@ -166,10 +218,65 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
       )
       .subscribe()
 
+    // Subscribe to member joins to sync new joiners
+    const memberJoinChannel = supabase
+      .channel(`room_${roomId}_member_joins`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'room_members',
+          filter: `room_id=eq.${roomId}`,
+        },
+        async (payload) => {
+          // Check if this is a new joiner (status changed to 'joined' and is_connected is true)
+          if (
+            payload.new.status === 'joined' &&
+            payload.new.is_connected === true &&
+            payload.new.user_id !== userId &&
+            room.current_video_url &&
+            canControl
+          ) {
+            // Clear any existing join sync timer
+            if (joinSyncTimerRef.current) {
+              clearTimeout(joinSyncTimerRef.current)
+            }
+
+            // Wait 5 seconds for the new joiner to load the video
+            joinSyncTimerRef.current = setTimeout(async () => {
+              if (!playerRef.current) return
+
+              const currentTime = playerRef.current.currentTime()
+              const timestamp = isNaN(currentTime) ? 0 : currentTime
+
+              // Pause for everyone to sync
+              await supabase
+                .from('rooms')
+                .update({
+                  is_playing: false,
+                  video_timestamp: timestamp,
+                })
+                .eq('id', roomId)
+
+              joinSyncTimerRef.current = null
+            }, 5000)
+          }
+        }
+      )
+      .subscribe()
+
     return () => {
-      channel.unsubscribe()
+      roomSyncChannel.unsubscribe()
+      memberJoinChannel.unsubscribe()
+
+      // Clear join sync timer on cleanup
+      if (joinSyncTimerRef.current) {
+        clearTimeout(joinSyncTimerRef.current)
+        joinSyncTimerRef.current = null
+      }
     }
-  }, [roomId, room, supabase])
+  }, [roomId, room, supabase, userId, canControl])
 
   const loadVideo = async (url, startTime = 0, updateDB = true) => {
     if (!playerRef.current) return
@@ -236,13 +343,16 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col p-4">
       {/* Video Container */}
-      <div className="flex-1 bg-black rounded-lg overflow-hidden relative">
-        <div data-vjs-player className="w-full h-full">
+      <div className="bg-black relative flex items-center justify-center p-4 mb-8 z-20">
+        <div
+          data-vjs-player
+          className="w-full z-20"
+        >
           <video
             ref={videoRef}
-            className="video-js vjs-default-skin w-full h-full"
+            className="video-js vjs-default-skin"
           />
         </div>
         {isLoading && (
@@ -253,7 +363,7 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
       </div>
 
       {/* Video URL Input */}
-      <div className="mt-4 flex gap-2">
+      <div className="flex gap-2 flex-shrink-0 mt-4">
         <input
           type="text"
           value={videoUrl}
@@ -277,11 +387,6 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
         </button>
       </div>
 
-      {!canControl && (
-        <p className="mt-2 text-sm text-gray-400">
-          Only the host can control playback
-        </p>
-      )}
     </div>
   )
 }

@@ -108,6 +108,9 @@ export default function DashboardPage() {
           filter: `user_id=eq.${user.id}`,
         },
         async (payload) => {
+          // Only show notification for invited status (not when user creates/joins)
+          if (payload.new.status !== 'invited') return
+
           // Fetch room info
           const { data: room } = await supabase
             .from('rooms')
@@ -120,6 +123,7 @@ export default function DashboardPage() {
             {
               id: payload.new.id,
               type: 'room_invite',
+              userId: user.id,
               data: {
                 roomId: room.id,
                 roomName: room.name,
