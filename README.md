@@ -1,36 +1,128 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Reelax 🎬
 
-## Getting Started
+A real-time collaborative movie streaming platform that lets you watch movies together with friends. Built with Next.js 16, React 19, AgoraSDK and Supabase.
 
-First, run the development server:
+> **Watch together, stay connected** - Synchronized playback, real-time chat, and video calls all in one place.
+
+---
+
+## 🌟 Features
+
+### ✅ Completed Features
+- **User Authentication** - Secure login with Google OAuth 2.0
+- **Friends System** - Search users, send/accept friend requests
+- **Room Management** - Create rooms, invite friends, configurable permissions
+- **Real-Time Notifications** - Instant friend requests and room invitations
+- **Responsive UI** - Works seamlessly on desktop and tablet
+- **Dark/Light Theme** - Customizable theme
+- **Video Player** -  with standard controls
+- **Video Synchronization** - Timestamp-based sync with latency compensation
+- **Real-Time Chat** - Text messaging with emoji support and message history
+- **Video/Voice Calls** - AgoraSDK integration for face-to-face communication
+
+---
+
+## 🛠️ Tech Stack
+
+### Frontend
+- **Next.js 16** - React framework with SSR/SSG
+- **React 19** - UI library with latest features
+- **Tailwind CSS 3** - Utility-first styling
+- **Supabase Client** - Real-time subscriptions and authentication
+- **AgoraSDK** - Face-to-face communication
+
+### Backend
+- **Next.js API Routes** - Serverless functions
+- **Supabase** - PostgreSQL database, authentication, and real-time services
+- **PostgreSQL 15** - Relational database with Row-Level Security
+
+### Authentication & Security
+- **Google OAuth 2.0** - Secure authentication
+- **Row-Level Security (RLS)** - Database-level access control
+
+---
+
+## 📋 Prerequisites
+
+Before you begin, ensure you have the following installed:
+- **Node.js** (v18.0 or higher)
+- **npm** (v9.0 or higher)
+- **Git**
+- A **Supabase account** (free tier is sufficient)
+- A **Google Cloud account** (for OAuth setup)
+
+---
+
+## 🚀 Getting Started
+
+### 1. Clone the Repository
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone https://github.com/judefernz12/Reelax.git
+cd reelax
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Install Dependencies
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+```bash
+npm install
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This will install all required packages including:
+- Next.js, React, Agora js and related dependencies
+- Supabase client libraries
+- Tailwind CSS and its dependencies
+- All other project dependencies
 
-## Learn More
+**Note:** If you encounter any peer dependency warnings, you can safely ignore them or run:
+```bash
+npm install --legacy-peer-deps
+```
 
-To learn more about Next.js, take a look at the following resources:
+### 3. Set Up Environment Variables
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Create a `.env.local` file in the root directory:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+touch .env.local
+```
 
-## Deploy on Vercel
+Add the following environment variables:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```env
+# Supabase Configuration
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+# Agora Configuration
+NEXT_PUBLIC_AGORA_APP_ID=your_agora_app_id
+```
+
+---
+
+## 👥 Authors
+
+**Jude Fernandes**
+**Kameshwara Karthik Ayyalasomayajula**
+---
+
+## 🙏 Acknowledgments
+
+- **Next.js** - The React framework for production
+- **Supabase** - Backend-as-a-service platform
+- **Tailwind CSS** - Utility-first CSS framework
+- **AgoraSDK** - Video/Audio Interaction
+
+---
+
+## 🔗 Links
+
+- **GitHub Repository:** [https://github.com/judefernz12/Reelax.git]
+
+---
+
+Made with ❤️ and Next.js
+
+---
+
+**Reelax and Happy streaming!🎬🍿**
