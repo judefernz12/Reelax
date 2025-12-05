@@ -63,9 +63,15 @@ export default function DashboardPage() {
           event: 'INSERT',
           schema: 'public',
           table: 'friendships',
-          filter: `user2_id=eq.${user.id}`,
         },
         async (payload) => {
+          // Only show notification if this user is the recipient (not the requester)
+          const isRecipient =
+            (payload.new.user1_id === user.id || payload.new.user2_id === user.id) &&
+            payload.new.requester_id !== user.id
+
+          if (!isRecipient) return
+
           // Fetch requester info
           const { data: requester } = await supabase
             .from('profiles')

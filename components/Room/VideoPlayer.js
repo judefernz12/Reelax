@@ -17,16 +17,25 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
 
   // Event handlers as refs to avoid recreating on every render
   const handlePlay = useCallback(async () => {
-    if (!canControl || syncLockRef.current) return
+    if (!canControl || syncLockRef.current || !playerRef.current) return
 
     syncLockRef.current = true
-    await supabase
+    const currentTime = playerRef.current.currentTime()
+
+    // Validate currentTime is a valid number
+    const timestamp = isNaN(currentTime) ? 0 : currentTime
+
+    const { error } = await supabase
       .from('rooms')
       .update({
         is_playing: true,
-        current_timestamp: playerRef.current.currentTime(),
+        video_timestamp: timestamp,
       })
       .eq('id', roomId)
+
+    if (error) {
+      console.error('Error updating play state:', error)
+    }
 
     setTimeout(() => {
       syncLockRef.current = false
@@ -34,16 +43,25 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
   }, [canControl, roomId, supabase])
 
   const handlePause = useCallback(async () => {
-    if (!canControl || syncLockRef.current) return
+    if (!canControl || syncLockRef.current || !playerRef.current) return
 
     syncLockRef.current = true
-    await supabase
+    const currentTime = playerRef.current.currentTime()
+
+    // Validate currentTime is a valid number
+    const timestamp = isNaN(currentTime) ? 0 : currentTime
+
+    const { error } = await supabase
       .from('rooms')
       .update({
         is_playing: false,
-        current_timestamp: playerRef.current.currentTime(),
+        video_timestamp: timestamp,
       })
       .eq('id', roomId)
+
+    if (error) {
+      console.error('Error updating pause state:', error)
+    }
 
     setTimeout(() => {
       syncLockRef.current = false
@@ -51,18 +69,25 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
   }, [canControl, roomId, supabase])
 
   const handleSeeked = useCallback(async () => {
-    if (!canControl || syncLockRef.current) return
+    if (!canControl || syncLockRef.current || !playerRef.current) return
 
     syncLockRef.current = true
     const currentTime = playerRef.current.currentTime()
 
-    await supabase
+    // Validate currentTime is a valid number
+    const timestamp = isNaN(currentTime) ? 0 : currentTime
+
+    const { error } = await supabase
       .from('rooms')
       .update({
         is_playing: false,
-        current_timestamp: currentTime,
+        video_timestamp: timestamp,
       })
       .eq('id', roomId)
+
+    if (error) {
+      console.error('Error updating seek state:', error)
+    }
 
     setTimeout(() => {
       syncLockRef.current = false
@@ -114,11 +139,11 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
         async (payload) => {
           if (syncLockRef.current) return // Prevent feedback loop
 
-          const { current_video_url, current_timestamp, is_playing } = payload.new
+          const { current_video_url, video_timestamp, is_playing } = payload.new
 
           // Handle video URL change
           if (current_video_url && current_video_url !== room.current_video_url) {
-            await loadVideo(current_video_url, current_timestamp, false)
+            await loadVideo(current_video_url, video_timestamp, false)
           }
 
           // Handle playback state change
@@ -126,10 +151,10 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
             syncLockRef.current = true
 
             if (is_playing) {
-              playerRef.current.currentTime(current_timestamp)
+              playerRef.current.currentTime(video_timestamp)
               playerRef.current.play()
             } else {
-              playerRef.current.currentTime(current_timestamp)
+              playerRef.current.currentTime(video_timestamp)
               playerRef.current.pause()
             }
 
@@ -158,7 +183,7 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
           .from('rooms')
           .update({
             current_video_url: url,
-            current_timestamp: 0,
+            video_timestamp: 0,
             is_playing: false,
           })
           .eq('id', roomId)

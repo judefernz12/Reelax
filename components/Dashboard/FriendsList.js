@@ -32,11 +32,12 @@ export default function FriendsList({ userId }) {
   }
 
   const fetchFriendRequests = async () => {
-    // Get pending requests where I am user2
+    // Get pending requests where I am the recipient (not the requester)
     const { data } = await supabase
       .from('friendships')
       .select('*, profiles!friendships_requester_id_fkey(*)')
-      .eq('user2_id', userId)
+      .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+      .neq('requester_id', userId)
       .eq('status', 'pending')
 
     setFriendRequests(data || [])

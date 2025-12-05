@@ -11,17 +11,17 @@ export default function NotificationPopup({ notification, onDismiss }) {
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          onDismiss()
-          return 0
-        }
-        return prev - 1
-      })
+      setTimeLeft((prev) => prev - 1)
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [onDismiss])
+  }, [])
+
+  useEffect(() => {
+    if (timeLeft <= 0) {
+      onDismiss()
+    }
+  }, [timeLeft, onDismiss])
 
   const handleAcceptFriendRequest = async () => {
     await supabase
