@@ -2,25 +2,89 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import AgoraRTC from 'agora-rtc-sdk-ng'
 
 export default function AvatarGrid({ roomId, userId, members }) {
   const supabase = createClient()
-  const [myStream, setMyStream] = useState(null)
   const [videoEnabled, setVideoEnabled] = useState(false)
   const [audioEnabled, setAudioEnabled] = useState(false)
   const [selectedCamera, setSelectedCamera] = useState('')
   const [selectedMic, setSelectedMic] = useState('')
   const [devices, setDevices] = useState({ cameras: [], mics: [] })
   const [showSettings, setShowSettings] = useState(false)
-  const myVideoRef = useRef(null)
+  const [remoteUsers, setRemoteUsers] = useState([])
+  const [isJoined, setIsJoined] = useState(false)
+
+  const clientRef = useRef(null)
+  const localVideoTrackRef = useRef(null)
+  const localAudioTrackRef = useRef(null)
+  const localVideoContainerRef = useRef(null)
+
+  // Initialize Agora client
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    // Initialize AgoraRTC client
+    const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' })
+    clientRef.current = client
+
+    // Event listeners
+    client.on('user-published', async (user, mediaType) => {
+      await client.subscribe(user, mediaType)
+
+      if (mediaType === 'video') {
+        setRemoteUsers((prev) => {
+          const existing = prev.find((u) => u.uid === user.uid)
+          if (existing) {
+            return prev.map((u) => u.uid === user.uid ? { ...u, videoTrack: user.videoTrack } : u)
+          }
+          return [...prev, { uid: user.uid, videoTrack: user.videoTrack, audioTrack: user.audioTrack }]
+        })
+      }
+
+      if (mediaType === 'audio') {
+        user.audioTrack?.play()
+        setRemoteUsers((prev) => {
+          const existing = prev.find((u) => u.uid === user.uid)
+          if (existing) {
+            return prev.map((u) => u.uid === user.uid ? { ...u, audioTrack: user.audioTrack } : u)
+          }
+          return [...prev, { uid: user.uid, videoTrack: user.videoTrack, audioTrack: user.audioTrack }]
+        })
+      }
+    })
+
+    client.on('user-unpublished', (user, mediaType) => {
+      if (mediaType === 'video') {
+        setRemoteUsers((prev) =>
+          prev.map((u) => u.uid === user.uid ? { ...u, videoTrack: null } : u)
+        )
+      }
+      if (mediaType === 'audio') {
+        setRemoteUsers((prev) =>
+          prev.map((u) => u.uid === user.uid ? { ...u, audioTrack: null } : u)
+        )
+      }
+    })
+
+    client.on('user-left', (user) => {
+      setRemoteUsers((prev) => prev.filter((u) => u.uid !== user.uid))
+    })
+
+    // Join the channel
+    joinChannel()
+
+    return () => {
+      leaveChannel()
+    }
+  }, [roomId, userId])
 
   // Get available devices
   useEffect(() => {
     const getDevices = async () => {
       try {
-        const deviceList = await navigator.mediaDevices.enumerateDevices()
-        const cameras = deviceList.filter((d) => d.kind === 'videoinput')
-        const mics = deviceList.filter((d) => d.kind === 'audioinput')
+        const cameras = await AgoraRTC.getCameras()
+        const mics = await AgoraRTC.getMicrophones()
         setDevices({ cameras, mics })
 
         if (cameras.length > 0) setSelectedCamera(cameras[0].deviceId)
@@ -33,65 +97,127 @@ export default function AvatarGrid({ roomId, userId, members }) {
     getDevices()
   }, [])
 
-  // Start/stop media stream
-  const toggleVideo = async () => {
+  const joinChannel = async () => {
+    if (!clientRef.current) return
+
     try {
-      if (!videoEnabled) {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: selectedCamera },
-          audio: { deviceId: selectedMic },
-        })
-        setMyStream(stream)
-        if (myVideoRef.current) {
-          myVideoRef.current.srcObject = stream
-        }
-        setVideoEnabled(true)
-        setAudioEnabled(true)
-      } else {
-        if (myStream) {
-          myStream.getTracks().forEach((track) => track.stop())
-        }
-        setMyStream(null)
-        setVideoEnabled(false)
-        setAudioEnabled(false)
+      const appId = process.env.NEXT_PUBLIC_AGORA_APP_ID
+      if (!appId) {
+        console.error('Agora App ID not found. Please add NEXT_PUBLIC_AGORA_APP_ID to .env.local')
+        return
       }
+
+      // Join the channel (using roomId as channel name and userId as UID)
+      await clientRef.current.join(appId, roomId, null, userId)
+      setIsJoined(true)
     } catch (error) {
-      console.error('Error accessing media devices:', error)
-      alert('Could not access camera/microphone. Please check permissions.')
+      console.error('Error joining Agora channel:', error)
     }
   }
 
-  const toggleAudio = () => {
-    if (myStream) {
-      const audioTrack = myStream.getAudioTracks()[0]
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled
-        setAudioEnabled(audioTrack.enabled)
+  const leaveChannel = async () => {
+    if (!clientRef.current) return
+
+    try {
+      // Stop and close local tracks
+      if (localVideoTrackRef.current) {
+        localVideoTrackRef.current.stop()
+        localVideoTrackRef.current.close()
+        localVideoTrackRef.current = null
       }
+      if (localAudioTrackRef.current) {
+        localAudioTrackRef.current.stop()
+        localAudioTrackRef.current.close()
+        localAudioTrackRef.current = null
+      }
+
+      // Leave the channel
+      await clientRef.current.leave()
+      setIsJoined(false)
+      setVideoEnabled(false)
+      setAudioEnabled(false)
+      setRemoteUsers([])
+    } catch (error) {
+      console.error('Error leaving Agora channel:', error)
+    }
+  }
+
+  const toggleVideo = async () => {
+    try {
+      if (!videoEnabled) {
+        // Create video track
+        const videoTrack = await AgoraRTC.createCameraVideoTrack({
+          cameraId: selectedCamera,
+        })
+        localVideoTrackRef.current = videoTrack
+
+        // Publish video track
+        if (clientRef.current && isJoined) {
+          await clientRef.current.publish([videoTrack])
+        }
+
+        // Play local video
+        if (localVideoContainerRef.current) {
+          videoTrack.play(localVideoContainerRef.current)
+        }
+        setVideoEnabled(true)
+      } else {
+        // Unpublish and stop video
+        if (clientRef.current && localVideoTrackRef.current) {
+          await clientRef.current.unpublish([localVideoTrackRef.current])
+          localVideoTrackRef.current.stop()
+          localVideoTrackRef.current.close()
+          localVideoTrackRef.current = null
+        }
+        setVideoEnabled(false)
+      }
+    } catch (error) {
+      console.error('Error toggling video:', error)
+      alert('Could not access camera. Please check permissions.')
+    }
+  }
+
+  const toggleAudio = async () => {
+    try {
+      if (!audioEnabled) {
+        // Create audio track
+        const audioTrack = await AgoraRTC.createMicrophoneAudioTrack({
+          microphoneId: selectedMic,
+        })
+        localAudioTrackRef.current = audioTrack
+
+        // Publish audio track
+        if (clientRef.current && isJoined) {
+          await clientRef.current.publish([audioTrack])
+        }
+
+        setAudioEnabled(true)
+      } else {
+        // Unpublish and stop audio
+        if (clientRef.current && localAudioTrackRef.current) {
+          await clientRef.current.unpublish([localAudioTrackRef.current])
+          localAudioTrackRef.current.stop()
+          localAudioTrackRef.current.close()
+          localAudioTrackRef.current = null
+        }
+        setAudioEnabled(false)
+      }
+    } catch (error) {
+      console.error('Error toggling audio:', error)
+      alert('Could not access microphone. Please check permissions.')
     }
   }
 
   const changeDevice = async (type, deviceId) => {
     if (type === 'camera') {
       setSelectedCamera(deviceId)
+      if (localVideoTrackRef.current) {
+        await localVideoTrackRef.current.setDevice(deviceId)
+      }
     } else {
       setSelectedMic(deviceId)
-    }
-
-    // Restart stream with new device
-    if (videoEnabled) {
-      if (myStream) {
-        myStream.getTracks().forEach((track) => track.stop())
-      }
-
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: type === 'camera' ? deviceId : selectedCamera },
-        audio: { deviceId: type === 'mic' ? deviceId : selectedMic },
-      })
-
-      setMyStream(newStream)
-      if (myVideoRef.current) {
-        myVideoRef.current.srcObject = newStream
+      if (localAudioTrackRef.current) {
+        await localAudioTrackRef.current.setDevice(deviceId)
       }
     }
   }
@@ -109,12 +235,9 @@ export default function AvatarGrid({ roomId, userId, members }) {
         <div className="relative group">
           <div className="aspect-video bg-gray-700 rounded-lg overflow-hidden relative">
             {videoEnabled ? (
-              <video
-                ref={myVideoRef}
-                autoPlay
-                muted
-                playsInline
-                className="w-full h-full object-cover"
+              <div
+                ref={localVideoContainerRef}
+                className="w-full h-full"
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
@@ -138,16 +261,18 @@ export default function AvatarGrid({ roomId, userId, members }) {
                 className={`w-10 h-10 rounded-full flex items-center justify-center ${
                   videoEnabled ? 'bg-blue-600' : 'bg-gray-600'
                 }`}
+                title={videoEnabled ? 'Turn off camera' : 'Turn on camera'}
               >
-                📹
+                {videoEnabled ? '📹' : '📹'}
               </button>
               <button
                 onClick={toggleAudio}
                 className={`w-10 h-10 rounded-full flex items-center justify-center ${
                   audioEnabled ? 'bg-blue-600' : 'bg-gray-600'
                 }`}
+                title={audioEnabled ? 'Mute microphone' : 'Unmute microphone'}
               >
-                🎤
+                {audioEnabled ? '🎤' : '🔇'}
               </button>
             </div>
 
@@ -162,9 +287,17 @@ export default function AvatarGrid({ roomId, userId, members }) {
         </div>
 
         {/* Other Members */}
-        {otherMembers.map((member) => (
-          <MemberAvatar key={member.id} member={member} />
-        ))}
+        {otherMembers.map((member) => {
+          // Find the remote user by matching member user_id with Agora UID
+          const remoteUser = remoteUsers.find((u) => u.uid === member.user_id)
+          return (
+            <MemberAvatar
+              key={member.id}
+              member={member}
+              remoteUser={remoteUser}
+            />
+          )
+        })}
       </div>
 
       {/* Device Settings Modal */}
@@ -218,9 +351,33 @@ export default function AvatarGrid({ roomId, userId, members }) {
   )
 }
 
-function MemberAvatar({ member }) {
+function MemberAvatar({ member, remoteUser }) {
   const [volume, setVolume] = useState(100)
   const [showVolume, setShowVolume] = useState(false)
+  const videoContainerRef = useRef(null)
+
+  // Play remote video when available
+  useEffect(() => {
+    if (remoteUser?.videoTrack && videoContainerRef.current) {
+      remoteUser.videoTrack.play(videoContainerRef.current)
+    }
+
+    return () => {
+      if (remoteUser?.videoTrack) {
+        remoteUser.videoTrack.stop()
+      }
+    }
+  }, [remoteUser?.videoTrack])
+
+  // Adjust remote audio volume
+  useEffect(() => {
+    if (remoteUser?.audioTrack) {
+      remoteUser.audioTrack.setVolume(volume)
+    }
+  }, [volume, remoteUser?.audioTrack])
+
+  const hasVideo = remoteUser?.videoTrack
+  const hasAudio = remoteUser?.audioTrack
 
   return (
     <div
@@ -229,18 +386,30 @@ function MemberAvatar({ member }) {
       onMouseLeave={() => setShowVolume(false)}
     >
       <div className="aspect-video bg-gray-700 rounded-lg overflow-hidden relative">
-        <div className="w-full h-full flex items-center justify-center">
-          <img
-            src={member.profiles.avatar_url || '/default-avatar.png'}
-            alt={member.profiles.username}
-            className="w-20 h-20 rounded-full"
+        {hasVideo ? (
+          <div
+            ref={videoContainerRef}
+            className="w-full h-full object-cover"
           />
-        </div>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <img
+              src={member.profiles.avatar_url || '/default-avatar.png'}
+              alt={member.profiles.username}
+              className="w-20 h-20 rounded-full"
+            />
+          </div>
+        )}
 
         {/* Username overlay */}
         <div className="absolute top-2 left-2 bg-black bg-opacity-75 px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity">
           {member.profiles.username}
         </div>
+
+        {/* Audio indicator */}
+        {hasAudio && (
+          <div className="absolute top-2 right-2 bg-green-600 w-3 h-3 rounded-full"></div>
+        )}
 
         {/* Volume Control */}
         {showVolume && (
@@ -251,7 +420,7 @@ function MemberAvatar({ member }) {
               min="0"
               max="100"
               value={volume}
-              onChange={(e) => setVolume(e.target.value)}
+              onChange={(e) => setVolume(Number(e.target.value))}
               className="w-20"
             />
           </div>

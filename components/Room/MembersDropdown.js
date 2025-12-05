@@ -119,10 +119,10 @@ export default function MembersDropdown({ roomId, userId, isHost, members, room 
       {isOpen && (
         <>
           <div
-            className="fixed inset-0 z-10"
+            className="fixed inset-0 z-30"
             onClick={() => setIsOpen(false)}
           />
-          <div className="absolute right-0 mt-2 w-72 bg-gray-800 rounded-lg shadow-lg border border-gray-700 z-20 max-h-96 overflow-y-auto">
+          <div className="absolute right-0 mt-2 w-72 bg-gray-800 rounded-lg shadow-lg border border-gray-700 z-40 max-h-96 overflow-y-auto">
             {canInvite && (
               <button
                 onClick={() => {

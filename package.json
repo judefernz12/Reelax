@@ -12,6 +12,8 @@
     "@supabase/ssr": "^0.7.0",
     "@supabase/supabase-js": "^2.76.1",
     "@videojs/http-streaming": "^3.17.2",
+    "agora-rtc-react": "^2.5.0",
+    "agora-rtc-sdk-ng": "^4.24.1",
     "date-fns": "^4.1.0",
     "hls.js": "^1.6.13",
     "next": "^16.0.7",
