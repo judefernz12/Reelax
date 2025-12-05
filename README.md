@@ -103,7 +103,9 @@ NEXT_PUBLIC_AGORA_APP_ID=your_agora_app_id
 ## 👥 Authors
 
 **Jude Fernandes**
+
 **Kameshwara Karthik Ayyalasomayajula**
+
 ---
 
 ## 🙏 Acknowledgments
