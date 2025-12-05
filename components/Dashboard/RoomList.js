@@ -12,12 +12,12 @@ export default function RoomList({ userId }) {
 
   useEffect(() => {
     const fetchRooms = async () => {
-      // Get all rooms where user is a member
+      // Get all rooms where user is a member (including rooms they've left)
       const { data: memberData } = await supabase
         .from('room_members')
         .select('room_id, status')
         .eq('user_id', userId)
-        .in('status', ['invited', 'joined'])
+        .in('status', ['invited', 'joined', 'left'])
 
       if (!memberData || memberData.length === 0) {
         setRooms([])

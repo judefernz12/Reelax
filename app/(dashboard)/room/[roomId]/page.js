@@ -1,7 +1,7 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
-import { useEffect, useState, use } from 'react'
+import { useEffect, useState, use, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import VideoPlayer from '@/components/Room/VideoPlayer'
 import AvatarGrid from '@/components/Room/AvatarGrid'
@@ -45,14 +45,8 @@ export default function RoomPage({ params }) {
         return
       }
 
-      // Check if user was kicked or blocked
-      if (membership.status === 'left') {
-        alert('You have been removed from this room')
-        router.push('/dashboard')
-        return
-      }
-
       // Update member status to joined and connected
+      // This allows users who previously left to rejoin
       await supabase
         .from('room_members')
         .update({
@@ -101,7 +95,7 @@ export default function RoomPage({ params }) {
     }
   }, [roomId, router, supabase])
 
-  const fetchMembers = async () => {
+  const fetchMembers = useCallback(async () => {
     const { data } = await supabase
       .from('room_members')
       .select('*, profiles(*)')
@@ -110,16 +104,18 @@ export default function RoomPage({ params }) {
       .eq('is_connected', true)
 
     setMembers(data || [])
-  }
+  }, [roomId, supabase])
 
   // Subscribe to member changes
   useEffect(() => {
+    if (!user) return
+
     const channel = supabase
-      .channel(`room_${roomId}_members`)
+      .channel(`room_members_${roomId}`)
       .on(
         'postgres_changes',
         {
-          event: '*',
+          event: 'INSERT',
           schema: 'public',
           table: 'room_members',
           filter: `room_id=eq.${roomId}`,
@@ -128,14 +124,135 @@ export default function RoomPage({ params }) {
           fetchMembers()
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'room_members',
+          filter: `room_id=eq.${roomId}`,
+        },
+        () => {
+          fetchMembers()
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'room_members',
+        },
+        () => {
+          // No filter on DELETE because Supabase doesn't include old row data
+          // Just refresh the members list for this room
+          fetchMembers()
+        }
+      )
       .subscribe()
 
     return () => {
       channel.unsubscribe()
     }
-  }, [roomId, supabase])
+  }, [roomId, supabase, fetchMembers, user])
+
+  // Subscribe to kicks - detect when current user's membership is deleted
+  useEffect(() => {
+    if (!user) return
+
+    const kickChannel = supabase
+      .channel(`kick_detection_${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'room_members',
+        },
+        async (payload) => {
+          // On any DELETE, check if current user still has membership
+          const { data: membership, error } = await supabase
+            .from('room_members')
+            .select('*')
+            .eq('room_id', roomId)
+            .eq('user_id', user.id)
+            .maybeSingle()
+
+          // If no membership found AND room still exists, user was kicked
+          // Check if room still exists to avoid false positive when room is deleted
+          if (!membership && !error) {
+            const { data: roomExists } = await supabase
+              .from('rooms')
+              .select('id')
+              .eq('id', roomId)
+              .maybeSingle()
+
+            if (roomExists) {
+              alert('You were kicked out of the room')
+              router.push('/dashboard')
+            }
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      kickChannel.unsubscribe()
+    }
+  }, [user, roomId, router, supabase])
+
+  // Subscribe to room updates - detect host changes and permission updates
+  useEffect(() => {
+    if (!room) return
+
+    const roomChannel = supabase
+      .channel(`room_updates_${roomId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'rooms',
+          filter: `id=eq.${roomId}`,
+        },
+        async () => {
+          // Fetch fresh room data with host profile
+          const { data: updatedRoom } = await supabase
+            .from('rooms')
+            .select('*, profiles!rooms_host_id_fkey(*)')
+            .eq('id', roomId)
+            .single()
+
+          if (updatedRoom) {
+            setRoom(updatedRoom)
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      roomChannel.unsubscribe()
+    }
+  }, [room, roomId, supabase])
 
   const handleLeaveRoom = async () => {
+    // Check if user is the host
+    if (room.host_id === user.id) {
+      // Check if there are other joined members to transfer hosting to
+      const { count } = await supabase
+        .from('room_members')
+        .select('*', { count: 'exact', head: true })
+        .eq('room_id', roomId)
+        .eq('status', 'joined')
+        .neq('user_id', user.id)
+
+      if (count > 0) {
+        alert('You are the host. Please transfer hosting to another member before leaving.')
+        return
+      }
+      // If host is the only one, they can leave and the room will be deleted
+    }
+
     if (confirm('Are you sure you want to leave this room?')) {
       await supabase
         .from('room_members')
@@ -143,18 +260,17 @@ export default function RoomPage({ params }) {
         .eq('room_id', roomId)
         .eq('user_id', user.id)
 
-      // If host leaves, check if room should be destroyed
-      if (room.host_id === user.id) {
-        const { count } = await supabase
-          .from('room_members')
-          .select('*', { count: 'exact', head: true })
-          .eq('room_id', roomId)
-          .eq('is_connected', true)
-          .neq('user_id', user.id)
+      // Check if there are any other joined members (not invited, not left)
+      const { count } = await supabase
+        .from('room_members')
+        .select('*', { count: 'exact', head: true })
+        .eq('room_id', roomId)
+        .eq('status', 'joined')
+        .neq('user_id', user.id)
 
-        if (count === 0) {
-          await supabase.from('rooms').delete().eq('id', roomId)
-        }
+      // If no one else is joined (only invited or left members remain), delete the room
+      if (count === 0) {
+        await supabase.from('rooms').delete().eq('id', roomId)
       }
 
       router.push('/dashboard')

@@ -1,7 +1,7 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 
 export default function FriendsList({ userId }) {
   const supabase = createClient()
@@ -11,12 +11,9 @@ export default function FriendsList({ userId }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
 
-  useEffect(() => {
-    fetchFriends()
-    fetchFriendRequests()
-  }, [userId])
+  const fetchFriends = useCallback(async () => {
+    if (!userId) return
 
-  const fetchFriends = async () => {
     const { data } = await supabase
       .from('friendships')
       .select('*, profiles!friendships_user1_id_fkey(*), profiles_user2:profiles!friendships_user2_id_fkey(*)')
@@ -29,9 +26,11 @@ export default function FriendsList({ userId }) {
     }) || []
 
     setFriends(friendsList)
-  }
+  }, [userId, supabase])
 
-  const fetchFriendRequests = async () => {
+  const fetchFriendRequests = useCallback(async () => {
+    if (!userId) return
+
     // Get pending requests where I am the recipient (not the requester)
     const { data } = await supabase
       .from('friendships')
@@ -41,7 +40,77 @@ export default function FriendsList({ userId }) {
       .eq('status', 'pending')
 
     setFriendRequests(data || [])
-  }
+  }, [userId, supabase])
+
+  useEffect(() => {
+    fetchFriends()
+    fetchFriendRequests()
+  }, [fetchFriends, fetchFriendRequests])
+
+  // Subscribe to real-time friendship changes
+  useEffect(() => {
+    if (!userId) return
+
+    const channel = supabase
+      .channel('friendships_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'friendships',
+        },
+        (payload) => {
+          // Check if this insert involves the current user
+          if (
+            payload.new.user1_id === userId ||
+            payload.new.user2_id === userId
+          ) {
+            // Refresh both friends and requests
+            fetchFriends()
+            fetchFriendRequests()
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'friendships',
+        },
+        (payload) => {
+          // Check if this update involves the current user
+          if (
+            payload.new.user1_id === userId ||
+            payload.new.user2_id === userId
+          ) {
+            // Refresh both friends and requests
+            fetchFriends()
+            fetchFriendRequests()
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'friendships',
+        },
+        (payload) => {
+          // Supabase DELETE events may not include old data by default
+          // So we refresh on ANY delete event to be safe
+          fetchFriends()
+          fetchFriendRequests()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      channel.unsubscribe()
+    }
+  }, [userId, supabase, fetchFriends, fetchFriendRequests])
 
   const searchUsers = async (query) => {
     if (!query.trim()) {
@@ -115,13 +184,14 @@ export default function FriendsList({ userId }) {
   const removeFriend = async (friendId) => {
     if (!confirm('Are you sure you want to remove this friend?')) return
 
-    const { error} = await supabase
+    const { error } = await supabase
       .from('friendships')
       .delete()
-      .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
-      .or(`user1_id.eq.${friendId},user2_id.eq.${friendId}`)
+      .or(`and(user1_id.eq.${userId},user2_id.eq.${friendId}),and(user1_id.eq.${friendId},user2_id.eq.${userId})`)
 
-    if (!error) {
+    if (error) {
+      console.error('Error removing friend:', error)
+    } else {
       fetchFriends()
     }
   }

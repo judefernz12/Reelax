@@ -11,10 +11,9 @@ export default function MembersDropdown({ roomId, userId, isHost, members, room 
   const canInvite = isHost || room.invite_users === 'everyone'
 
   useEffect(() => {
-    if (showInvite) {
-      fetchFriends()
-    }
-  }, [showInvite])
+    // Always fetch friends to check who is already a friend
+    fetchFriends()
+  }, [members])
 
   const fetchFriends = async () => {
     const { data } = await supabase
@@ -53,14 +52,36 @@ export default function MembersDropdown({ roomId, userId, isHost, members, room 
     }
   }
 
-  const kickMember = async (memberId) => {
+  const kickMember = async (memberId, memberUserId) => {
     if (!isHost) return
 
     if (confirm('Are you sure you want to kick this member?')) {
+      // Delete the member entirely so they can't rejoin
       await supabase
         .from('room_members')
-        .update({ status: 'left', is_connected: false })
+        .delete()
         .eq('id', memberId)
+
+      // The kicked user will be notified through realtime subscription
+      // They'll see the room_members table update and get redirected
+    }
+  }
+
+  const transferHost = async (newHostId) => {
+    if (!isHost) return
+
+    if (confirm('Are you sure you want to transfer host privileges to this member?')) {
+      const { error } = await supabase
+        .from('rooms')
+        .update({ host_id: newHostId })
+        .eq('id', roomId)
+
+      if (error) {
+        alert('Failed to transfer host')
+        console.error('Error transferring host:', error)
+      }
+      // The room update will be detected by real-time subscription
+      // Host privileges will update automatically for everyone
     }
   }
 
@@ -135,21 +156,21 @@ export default function MembersDropdown({ roomId, userId, isHost, members, room 
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {member.user_id !== userId && !isFriend(member.user_id) && (
-                      <button
-                        onClick={() => sendFriendRequest(member.user_id)}
-                        className="text-xs text-blue-400 hover:text-blue-300"
-                      >
-                        + Add
-                      </button>
-                    )}
                     {isHost && member.user_id !== userId && (
-                      <button
-                        onClick={() => kickMember(member.id)}
-                        className="text-xs text-red-400 hover:text-red-300"
-                      >
-                        Kick
-                      </button>
+                      <>
+                        <button
+                          onClick={() => transferHost(member.user_id)}
+                          className="text-xs text-green-400 hover:text-green-300"
+                        >
+                          Make Host
+                        </button>
+                        <button
+                          onClick={() => kickMember(member.id, member.user_id)}
+                          className="text-xs text-red-400 hover:text-red-300"
+                        >
+                          Kick
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
