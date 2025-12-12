@@ -50,7 +50,7 @@ export default function ChatBox({ roomId, userId, onClose }) {
   }, [messages])
 
   const fetchMessages = async () => {
-    // In production, you'd store messages in database
+    
     // For now, messages only exist during the session
     setMessages([])
   }

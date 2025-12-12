@@ -9,6 +9,10 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
+      <head>
+        {/* Video.js CSS */}
+        <link href="https://vjs.zencdn.net/8.10.0/video-js.css" rel="stylesheet" />
+      </head>
       <body className="bg-gray-50 dark:bg-gray-900">
         {children}
       </body>

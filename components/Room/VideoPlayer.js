@@ -14,6 +14,48 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
   const joinSyncTimerRef = useRef(null)
   const wasPlayingBeforeSeekRef = useRef(false)
 
+  const isYouTubeUrl = (url) => {
+    try {
+      const parsed = new URL(url)
+      const host = parsed.hostname.replace('www.', '')
+      return (
+        host === 'youtube.com' ||
+        host === 'm.youtube.com' ||
+        host === 'youtu.be'
+      )
+    } catch {
+      return false
+    }
+  }
+
+  const extractYouTubeId = (url) => {
+    try {
+      const parsed = new URL(url)
+      const host = parsed.hostname.replace('www.', '')
+
+      if (host === 'youtu.be') {
+        return parsed.pathname.slice(1)
+      }
+
+      if (host === 'youtube.com' || host === 'm.youtube.com') {
+        const vParam = parsed.searchParams.get('v')
+        if (vParam) return vParam
+
+        const parts = parsed.pathname.split('/')
+        const embedIndex = parts.indexOf('embed')
+        if (embedIndex !== -1 && parts[embedIndex + 1]) {
+          return parts[embedIndex + 1]
+        }
+      }
+    } catch (e) {
+      // Fallback to basic regex if URL parsing fails
+      const match = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11})/)
+      if (match && match[1]) return match[1]
+    }
+
+    return null
+  }
+
   const canControl = true // Everyone can control playback
   const canLoadVideo = isHost || room.load_movies === 'everyone'
 
@@ -84,19 +126,10 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
   }, [])
 
   const handleSeeked = useCallback(async () => {
-    if (!canControl || syncLockRef.current || !playerRef.current) return
-
-    // Clear any pending join sync timer when user manually seeks
-    if (joinSyncTimerRef.current) {
-      clearTimeout(joinSyncTimerRef.current)
-      joinSyncTimerRef.current = null
-    }
+    if (!canControl || !playerRef.current) return
 
     syncLockRef.current = true
     const currentTime = playerRef.current.currentTime()
-
-    // Use the flag we set in handleSeeking to know if it was playing
-    const wasPlaying = wasPlayingBeforeSeekRef.current
 
     // Validate currentTime is a valid number
     const timestamp = isNaN(currentTime) ? 0 : currentTime
@@ -104,8 +137,8 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
     const { error } = await supabase
       .from('rooms')
       .update({
-        is_playing: wasPlaying,
         video_timestamp: timestamp,
+        is_playing: wasPlayingBeforeSeekRef.current,
       })
       .eq('id', roomId)
 
@@ -113,8 +146,8 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
       console.error('Error updating seek state:', error)
     }
 
-    // If it was playing before seek, resume playback locally
-    if (wasPlaying && playerRef.current.paused()) {
+    // If the video was playing before seek, resume playback for everyone
+    if (wasPlayingBeforeSeekRef.current) {
       playerRef.current.play()
     }
 
@@ -126,37 +159,42 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
   useEffect(() => {
     // Initialize Video.js
     if (typeof window !== 'undefined' && videoRef.current && !playerRef.current) {
-      import('video.js').then((videojs) => {
-        // Double-check player doesn't exist (race condition protection)
-        if (playerRef.current) return
+      Promise.all([import('video.js'), import('videojs-youtube')]).then(
+        ([videojs]) => {
+          // Double-check player doesn't exist (race condition protection)
+          if (playerRef.current) return
 
-        const player = videojs.default(videoRef.current, {
-          controls: true,
-          fluid: true,
-          preload: 'auto',
-        })
-
-        playerRef.current = player
-
-        // Listen to player events
-        player.on('play', handlePlay)
-        player.on('pause', handlePause)
-        player.on('seeking', handleSeeking)
-        player.on('seeked', handleSeeked)
-
-        // Auto-load current video if one exists in the room
-        if (room.current_video_url) {
-          loadVideo(room.current_video_url, room.video_timestamp, false).then(() => {
-            // Set initial play state after video loads
-            if (room.is_playing) {
-              player.one('loadedmetadata', () => {
-                player.currentTime(room.video_timestamp)
-                player.play()
-              })
-            }
+          const player = videojs.default(videoRef.current, {
+            controls: true,
+            fluid: true,
+            preload: 'auto',
+            techOrder: ['html5', 'youtube'],
           })
+
+          playerRef.current = player
+
+          // Listen to player events
+          player.on('play', handlePlay)
+          player.on('pause', handlePause)
+          player.on('seeking', handleSeeking)
+          player.on('seeked', handleSeeked)
+
+          // Auto-load current video if one exists in the room
+          if (room.current_video_url) {
+            loadVideo(room.current_video_url, room.video_timestamp, false).then(
+              () => {
+                // Set initial play state after video loads
+                if (room.is_playing) {
+                  player.one('loadedmetadata', () => {
+                    player.currentTime(room.video_timestamp)
+                    player.play()
+                  })
+                }
+              }
+            )
+          }
         }
-      })
+      )
     }
 
     return () => {
@@ -165,9 +203,9 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
         playerRef.current = null
       }
     }
-  }, [handlePlay, handlePause, handleSeeking, handleSeeked])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId])
 
-  // Subscribe to room changes
   useEffect(() => {
     const roomSyncChannel = supabase
       .channel(`room_${roomId}_sync`)
@@ -230,37 +268,46 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
           filter: `room_id=eq.${roomId}`,
         },
         async (payload) => {
-          // Check if this is a new joiner (status changed to 'joined' and is_connected is true)
-          if (
-            payload.new.status === 'joined' &&
-            payload.new.is_connected === true &&
-            payload.new.user_id !== userId &&
-            room.current_video_url &&
-            canControl
-          ) {
-            // Clear any existing join sync timer
-            if (joinSyncTimerRef.current) {
-              clearTimeout(joinSyncTimerRef.current)
-            }
-
-            // Wait 5 seconds for the new joiner to load the video
-            joinSyncTimerRef.current = setTimeout(async () => {
-              if (!playerRef.current) return
+          if (payload.new.user_id === userId && payload.new.needs_sync) {
+            // New member or returning member that needs syncing
+            if (playerRef.current) {
+              syncLockRef.current = true
 
               const currentTime = playerRef.current.currentTime()
               const timestamp = isNaN(currentTime) ? 0 : currentTime
 
-              // Pause for everyone to sync
-              await supabase
-                .from('rooms')
-                .update({
-                  is_playing: false,
-                  video_timestamp: timestamp,
-                })
-                .eq('id', roomId)
+              // Pause and sync timestamp for the new joiner
+              playerRef.current.pause()
+              playerRef.current.currentTime(room.video_timestamp || timestamp)
 
-              joinSyncTimerRef.current = null
-            }, 5000)
+              // Update the member record to mark sync as done
+              await supabase
+                .from('room_members')
+                .update({
+                  needs_sync: false,
+                })
+                .eq('id', payload.new.id)
+
+              // After a short delay, resume playback if the room is playing
+              if (room.is_playing) {
+                joinSyncTimerRef.current = setTimeout(async () => {
+                  if (playerRef.current) {
+                    playerRef.current.play()
+                  }
+
+                  // Update room state to ensure consistency
+                  const { error } = await supabase
+                    .from('rooms')
+                    .update({
+                      is_playing: false,
+                      video_timestamp: timestamp,
+                    })
+                    .eq('id', roomId)
+
+                  joinSyncTimerRef.current = null
+                }, 5000)
+              }
+            }
           }
         }
       )
@@ -297,9 +344,18 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
       }
 
       // Detect video type and load accordingly
-      if (url.includes('youtube.com') || url.includes('youtu.be')) {
-        // YouTube handling would require iframe API
-        alert('YouTube support coming soon! Use direct video URLs for now.')
+      if (isYouTubeUrl(url)) {
+        const videoId = extractYouTubeId(url)
+        if (!videoId) {
+          alert('Could not extract a valid YouTube video ID from this URL.')
+          setIsLoading(false)
+          return
+        }
+
+        playerRef.current.src({
+          src: `https://www.youtube.com/watch?v=${videoId}`,
+          type: 'video/youtube',
+        })
       } else if (url.includes('.m3u8')) {
         // HLS stream
         playerRef.current.src({
@@ -307,7 +363,7 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
           type: 'application/x-mpegURL',
         })
       } else {
-        // Direct video file
+        // Direct video file (assume MP4 or browser-supported format)
         playerRef.current.src({
           src: url,
           type: 'video/mp4',
@@ -346,14 +402,8 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
     <div className="h-full flex flex-col p-4">
       {/* Video Container */}
       <div className="bg-black relative flex items-center justify-center p-4 mb-8 z-20">
-        <div
-          data-vjs-player
-          className="w-full z-20"
-        >
-          <video
-            ref={videoRef}
-            className="video-js vjs-default-skin"
-          />
+        <div data-vjs-player className="w-full z-20">
+          <video ref={videoRef} className="video-js vjs-default-skin" />
         </div>
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-75 z-10">
@@ -368,7 +418,7 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
           type="text"
           value={videoUrl}
           onChange={(e) => setVideoUrl(e.target.value)}
-          placeholder="Enter video URL (mp4, m3u8, etc.)"
+          placeholder="Enter video URL (mp4, m3u8, YouTube, etc.)"
           className={`flex-1 px-4 py-2 bg-gray-800 border border-gray-700 rounded ${
             !canLoadVideo ? 'opacity-50 cursor-not-allowed' : ''
           }`}
@@ -386,7 +436,6 @@ export default function VideoPlayer({ roomId, userId, room, isHost }) {
           Load
         </button>
       </div>
-
     </div>
   )
 }

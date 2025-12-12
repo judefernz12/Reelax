@@ -97,6 +97,13 @@ export default function AvatarGrid({ roomId, userId, members }) {
     getDevices()
   }, [])
 
+
+  useEffect(() => {
+    if (videoEnabled && localVideoTrackRef.current && localVideoContainerRef.current) {
+      localVideoTrackRef.current.play(localVideoContainerRef.current)
+    }
+  }, [videoEnabled]) 
+
   const joinChannel = async () => {
     if (!clientRef.current) return
 
@@ -156,10 +163,9 @@ export default function AvatarGrid({ roomId, userId, members }) {
           await clientRef.current.publish([videoTrack])
         }
 
-        // Play local video
-        if (localVideoContainerRef.current) {
-          videoTrack.play(localVideoContainerRef.current)
-        }
+        // REMOVED: The manual play call here was failing because the Ref was null.
+        // It is now handled by the new useEffect above.
+        
         setVideoEnabled(true)
       } else {
         // Unpublish and stop video
@@ -238,6 +244,8 @@ export default function AvatarGrid({ roomId, userId, members }) {
               <div
                 ref={localVideoContainerRef}
                 className="w-full h-full"
+                // Added transform to mirror local video (optional but standard UX)
+                style={{ transform: 'rotateY(180deg)' }} 
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
@@ -250,12 +258,12 @@ export default function AvatarGrid({ roomId, userId, members }) {
             )}
 
             {/* Username overlay on hover */}
-            <div className="absolute top-2 left-2 bg-black bg-opacity-75 px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute top-2 left-2 bg-black bg-opacity-75 px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity z-10">
               {myMember?.profiles?.username} (You)
             </div>
 
             {/* Controls - Bottom Right */}
-            <div className="absolute bottom-2 right-2 flex gap-2">
+            <div className="absolute bottom-2 right-2 flex gap-2 z-10">
               <button
                 onClick={toggleVideo}
                 className={`w-10 h-10 rounded-full flex items-center justify-center ${
@@ -279,9 +287,9 @@ export default function AvatarGrid({ roomId, userId, members }) {
             {/* Settings - Top Right */}
             <button
               onClick={() => setShowSettings(!showSettings)}
-              className="absolute top-2 right-2 w-8 h-8 bg-gray-700 rounded-full flex items-center justify-center hover:bg-gray-600"
+              className="absolute top-2 right-2 w-8 h-8 bg-gray-700 rounded-full flex items-center justify-center hover:bg-gray-600 z-10"
             >
-              ⚙️
+             ⚙️
             </button>
           </div>
         </div>

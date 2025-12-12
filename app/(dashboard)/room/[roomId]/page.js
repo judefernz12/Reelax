@@ -44,8 +44,7 @@ export default function RoomPage({ params }) {
         router.push('/dashboard')
         return
       }
-
-      // Update member status to joined and connected
+  
       // This allows users who previously left to rejoin
       await supabase
         .from('room_members')
